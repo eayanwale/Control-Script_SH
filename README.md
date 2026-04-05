@@ -10,7 +10,7 @@ A multi-purpose Bash utility for Oracle database administration. This script con
 
 ---
 
-## Prerequisitesa
+## Prerequisites
 
 - Oracle Database with Data Pump (`expdp` / `impdp`) configured
 - Oracle environment files at `/home/oracle/scripts/oracle_env_<DBNAME>.sh`
