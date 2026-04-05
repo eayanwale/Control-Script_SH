@@ -1,0 +1,11 @@
+*.log
+*.par
+*.lst
+*.pem
+*.dmp
+*.tar
+*.key
+*.env
+wallet/
+tnsnames.ora
+sqlnet.ora
