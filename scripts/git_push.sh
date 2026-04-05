@@ -22,13 +22,12 @@ target=$1
 
 if [ -z ${target} ]; then
         echo "Usage: ./git_push.sh <environment>"
-        echo "Environments: dev, qa, uat, main"
+        echo "Environments: dev, qa, uat, main, skip"
         exit 1
 fi
 echo
 
-read -p "Skip pipeline/workflow? (y/n) " SKIP
-if [[ ${SKIP^^} == 'Y' ]]; then
+if [[ ${target} == "skip" ]]; then
 	echo "You have opted to skip and go straight to prod."
 	read -sp "Please enter G/admin password: " PASS
 	if [[ ${PASS} != "imaG" && ${PASS} != "admin" ]]; then
