@@ -253,6 +253,7 @@ Located at `scripts/git_push.sh`. Automates staging, committing, pushing, and me
 **Production protection:** Merging into `main` requires a password prompt. Unauthorized users are blocked from pushing to production.
 
 **Skip mode:** The `skip` option bypasses the normal promotion pipeline and merges the current branch sequentially into all environments (`dev` → `qa` → `uat` → `main`) in a single run. This is intended for hotfixes or urgent changes that need to reach production immediately. Requires the same password authentication as a direct `main` push.
+
 ---
 
 ## Repository Structure
