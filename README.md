@@ -227,6 +227,7 @@ All changes follow a promotion pipeline: **feature branch → dev → qa → uat
    ./scripts/git_push.sh qa      # promote to QA after testing
    ./scripts/git_push.sh uat     # promote to UAT after QA approval
    ./scripts/git_push.sh main    # promote to production (password required)
+   ./scripts/git_push.sh skip    # skip straight to prod — merges into all environments (password required)
    ```
 
 ### git_push.sh — Automated Push and Merge
@@ -238,7 +239,7 @@ Located at `scripts/git_push.sh`. Automates staging, committing, pushing, and me
 ./scripts/git_push.sh <environment>
 ```
 
-**Environments:** `dev`, `qa`, `uat`, `main`
+**Environments:** `dev`, `qa`, `uat`, `main`, `skip`
 
 **What it does:**
 1. Prompts for a commit message
@@ -251,6 +252,7 @@ Located at `scripts/git_push.sh`. Automates staging, committing, pushing, and me
 
 **Production protection:** Merging into `main` requires a password prompt. Unauthorized users are blocked from pushing to production.
 
+**Skip mode:** The `skip` option bypasses the normal promotion pipeline and merges the current branch sequentially into all environments (`dev` → `qa` → `uat` → `main`) in a single run. This is intended for hotfixes or urgent changes that need to reach production immediately. Requires the same password authentication as a direct `main` push.
 ---
 
 ## Repository Structure
