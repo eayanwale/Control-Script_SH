@@ -12,7 +12,11 @@ MERGE()
 {
         echo "--- Merging ${branch} into ${target} ---"
         git checkout ${target}
-        git merge ${branch}
+    	if ! git merge ${branch}; then
+        	echo "ERROR: Merge conflict merging ${branch} into ${target}."
+        	echo "Resolve conflicts manually, then re-run."
+        	exit 1
+    	fi
         git push
 }
 
@@ -41,12 +45,17 @@ if [[ ${target} == "skip" ]]; then
 	COMMIT
 	
 	echo "--- Merging ${branch} and skipping through environments ---"
+	prev=${branch}
 	for env in dev qa uat main
 	do
-		echo "--- Merging ${branch} into ${env} ---"
+		echo "--- Merging ${prev} into ${env} ---"
 		git checkout ${env}
-		git merge ${branch}
+		if ! git merge ${prev}; then
+			echo "ERROR: Conflict merging into ${env}. Resolve and Re-run."
+			exit 1
+		fi
 		git push
+		prev=${env}
 	done
 	git checkout ${branch}
 	echo "${branch} pushed and merged into ${target}."
