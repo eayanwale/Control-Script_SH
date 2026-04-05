@@ -209,6 +209,50 @@ All critical operations send email notifications to `${ALERT_EMAIL}` for the fol
 
 ---
 
+## Git Workflow
+
+### Development Workflow
+
+All changes follow a promotion pipeline: **feature branch → dev → qa → uat → main**.
+
+1. Create a feature branch off `dev`:
+   ```bash
+   git checkout dev
+   git checkout -b my-feature
+   ```
+
+2. Make changes, then use `git_push.sh` to commit and promote through each environment:
+   ```bash
+   ./scripts/git_push.sh dev     # merge into dev
+   ./scripts/git_push.sh qa      # promote to QA after testing
+   ./scripts/git_push.sh uat     # promote to UAT after QA approval
+   ./scripts/git_push.sh main    # promote to production (password required)
+   ```
+
+### git_push.sh — Automated Push and Merge
+
+Located at `scripts/git_push.sh`. Automates staging, committing, pushing, and merging the current branch into a target environment. Pushing to `main` requires password authentication as a safeguard against accidental production deployments.
+
+**Usage:**
+```bash
+./scripts/git_push.sh <environment>
+```
+
+**Environments:** `dev`, `qa`, `uat`, `main`
+
+**What it does:**
+1. Prompts for a commit message
+2. Stages all changes and commits to the current branch
+3. Pushes the current branch to origin
+4. Checks out the target environment branch
+5. Merges the current branch into it
+6. Pushes the target branch to origin
+7. Returns to the original branch
+
+**Production protection:** Merging into `main` requires a password prompt. Unauthorized users are blocked from pushing to production.
+
+---
+
 ## Repository Structure
 
 ```
@@ -220,6 +264,8 @@ Control-Script_SH/
 │   ├── CONTROL_SCRIPT_SHELL_v1.1.sh
 │   ├── ...
 │   └── CONTROL_SCRIPT_SHELL_v1.19.sh
+├── scripts/
+│   └── git_push.sh
 ├── lists/
 ├── logs/
 └── misc/
@@ -278,3 +324,4 @@ sqlnet.ora
 ## License
 
 Internal use only.
+
