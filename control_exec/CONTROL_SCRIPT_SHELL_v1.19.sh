@@ -1,25 +1,23 @@
 #!/bin/bash
 
-# ---- Required environment variables ----
-# Export these before running the script:
-#   export DB_USER="stack_temp"
-#   export DB_PASS="stackinc"
-#   export ALERT_EMAIL="${ALERT_EMAIL}"
-#   export PEM_KEY_FILE="/path/to/stackcloud15_kp.pem"
-#   export DATA_PUMP_DIR="/backup/AWSJAN26/DATAPUMP"
-#   export PRACTICE_DIR="/home/oracle/scripts/practicedir_eno_jan26/BIN/BASH"
-#   export ORACLE_SSH_USER="oracle"   # optional, defaults to oracle
-: "${DB_USER:?ERROR: DB_USER is not set}"
-: "${DB_PASS:?ERROR: DB_PASS is not set}"
-: "${ALERT_EMAIL:?ERROR: ALERT_EMAIL is not set}"
-: "${PEM_KEY_FILE:?ERROR: PEM_KEY_FILE is not set}"
-: "${DATA_PUMP_DIR:?ERROR: DATA_PUMP_DIR is not set}"
-: "${PRACTICE_DIR:?ERROR: PRACTICE_DIR is not set}"
-: "${ORACLE_SSH_USER:=oracle}"
+ENV_SECRETS="/home/oracle/scripts/practicedir_eno_jan26/BIN/BASH/.env_secrets.sh"
+# Source env_cloud secrets file
+if [[ -f ${ENV_SECRETS} ]]
+then
+   echo "Found cloud secrets file. Will use secrets if/when needed."
+   source ${ENV_SECRETS}
+else
+   echo "Cannot find secrets. Exiting."
+   exit 1
+fi
 
 #Function declaration
 SCP()
 {
+   # Assign to env variables
+   local pem_key=${PEM_KEY}
+   local stack_email=${STACK_EMAIL}
+
 	if ( ! ping -q -c 1 -W 3 "${DST_SERV}" )
 	then
 		echo "Server ${DST_SERV} cannot be reached!"
@@ -34,19 +32,19 @@ SCP()
    then
          echo "${DST_SERV} is a CLOUD server..."
          #-check if .pem file exists
-         if [[ ! -f ${PEM_KEY_FILE} ]]
+         if [[ ! -f ${pem_key} ]]
          then
             echo "Private key not found. Aborting."
             exit 1
          fi
 			echo
          echo "Copying ${SRC} to ${DST_USER}@${DST_SERV} at ${DST_PATH}"
-         scp -r -i "${PEM_KEY_FILE}" "${SRC}" "${DST_USER}"@"${DST_SERV}":"${DST_PATH}"
+         scp -r -i ${pem_key} "${SRC}" "${DST_USER}"@"${DST_SERV}":"${DST_PATH}"
 			ON_PREM_EX=$?
 			if [ ${ON_PREM_EX} -ne 0 ]
 			then
             echo "Secure copy Skipped One or More Files! !"
-				mailx -s "WARNING: [${RUNNER}] Secure Copy Skip Alert" ${ALERT_EMAIL} << EOF
+				mailx -s "WARNING: [${RUNNER}] Secure Copy Skip Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Secure Copy of ${SRC} to ${DST_USER}@${DST_SERV} at path: ${DST_PATH} skipped some files!
@@ -61,7 +59,7 @@ EOF
          if ! scp -r -o HostKeyAlgorithms=+ssh-rsa "${SRC}" "${DST_USER}"@"${DST_SERV}":"${DST_PATH}"
 			then
              echo "Secure copy FAILED!"
-            mailx -s "WARNING: [${RUNNER}] Secure Copy Failure Alert" ${ALERT_EMAIL} << EOF
+            mailx -s "WARNING: [${RUNNER}] Secure Copy Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Secure Copy of ${SRC} to ${DST_USER}@${DST_SERV} at path: ${DST_PATH} FAILED!
@@ -74,7 +72,11 @@ EOF
 
 BACKUP_F_D()
 {
-   local DISKS="/backup"
+   local DISKS=${BACKUP_DISK}
+	local THRESHOLD="80"
+	local stack_email=${STACK_EMAIL}
+	local prac_dir=${PRACTICE_DIR}
+
    echo "Checking disk utilization..."
    echo "------------------"
    DISK_UTILIZATION "${DISKS}" "${THRESHOLD}" "${RUNNER}"
@@ -84,7 +86,7 @@ BACKUP_F_D()
       exit 1
    fi
 
-	BACKUP_DIR=${PRACTICE_DIR}/backup/${RUNNER}/$TS
+	BACKUP_DIR=${prac_dir}/backup/${RUNNER}/$TS
 
    echo "Creating backup directory ${BACKUP_DIR}..."
    mkdir -p ${BACKUP_DIR}
@@ -100,7 +102,7 @@ BACKUP_F_D()
       if [ $? -ne 0 ]
       then
          echo "Directory copy FAILED!"
-         mailx -s "WARNING: [${RUNNER}] File/Directory Copy Failure Alert" ${ALERT_EMAIL} << EOF
+         mailx -s "WARNING: [${RUNNER}] File/Directory Copy Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 File/Directory  Copy of ${SRC} to ${BACKUP_DIR}/backup_dir FAILED!
@@ -117,7 +119,7 @@ EOF
       if [ $? -ne 0 ]
       then
          echo "File copy FAILED!"
-         mailx -s "WARNING: [${RUNNER}] File/Directory Copy Failure Alert" ${ALERT_EMAIL} << EOF
+         mailx -s "WARNING: [${RUNNER}] File/Directory Copy Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 File/Directory  Copy of ${SRC} to ${BACKUP_DIR}/backup_file FAILED!
@@ -143,11 +145,13 @@ EOF
 	fi
 
 	echo "Showing timestamped backup: "
-	ls -ltr ${PRACTICE_DIR}/backup/${RUNNER}
+	ls -ltr ${prac_dir}/backup/${RUNNER}
 }
 
 DISK_UTILIZATION()
 {
+	local stack_email=${STACK_EMAIL}
+
 	for disk in ${DISKS}
 	do
 		#-check if disk is mounted
@@ -166,7 +170,7 @@ DISK_UTILIZATION()
 		then
 			echo "WARNING: ${disk} utilization is ${disk_check}% (threshold: ${THRESHOLD}%)"
 			echo "Sending alert to DevOps distro..."
-			mailx -s "Alert: [${RUNNER}] Disk Utilization Exceeded!" ${ALERT_EMAIL} <<EOF
+			mailx -s "Alert: [${RUNNER}] Disk Utilization Exceeded!" ${stack_email} <<EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Disk Utilization on ${disk} is ${disk_check}
@@ -179,7 +183,14 @@ EOF
 
 DATABASE_BACKUP() 
 {
+	local THRESHOLD="80"
 	local DISKS="/backup"
+	local DATA_PUMP=${DB_DIR}
+	local stack_email=${STACK_EMAIL}
+	local prac_dir=${PRACTICE_DIR}
+	local script_dir=${SCRIPT_DIR}
+	local db_user=${ONPREM_DB_USER}
+	local db_pass=${ONPREM_DB_PASS}
 	echo "Checking disk utilization..."
 	echo "------------------"	
 	DISK_UTILIZATION "${DISKS}" "${THRESHOLD}" "${RUNNER}"		
@@ -190,8 +201,7 @@ DATABASE_BACKUP()
 	fi
 
    #-database status	
-	TS=$(date "+%m_%d_%Y_%H_%M_%S")
-	ENV_FILE="/home/oracle/scripts/oracle_env_${DB_NAME}.sh"
+	ENV_FILE="${script_dir}/oracle_env_${DB_NAME}.sh"
    #-settiing database environment variable dynamically
 	if [[ ! -f ${ENV_FILE} ]] 
 	then
@@ -200,9 +210,7 @@ DATABASE_BACKUP()
 	fi
    source ${ENV_FILE}
 
-	DATA_PUMP="${DATA_PUMP_DIR}"
-   PARFILE="${PRACTICE_DIR}/expdp_${SCHEMA}_${RUNNER}_${TS}.par"
-   SCHEMALIST="${PRACTICE_DIR}/schemas.lst"
+	SCHEMALIST="${prac_dir}/schemas.lst"
 
 	#-boolean check
 	if ( ps -ef | grep pmon | grep ${DB_NAME} )
@@ -214,9 +222,9 @@ DATABASE_BACKUP()
 	fi
 	echo
 
-	DBCHECKLOG="${PRACTICE_DIR}/dbcheck.log"
+	DBCHECKLOG="${prac_dir}/dbcheck.log"
 	#-get database open status
-	sqlplus ${DB_USER}/${DB_PASS} <<EOF > ${DBCHECKLOG}
+	sqlplus -s /@enoch_apexdb <<EOF > ${DBCHECKLOG}
 set echo on feedback on term on pagesize 0
 select status from v\$instance;
 EOF
@@ -231,7 +239,7 @@ EOF
 	fi
 	echo
 
-   sqlplus -s ${DB_USER}/${DB_PASS} << LSTEOF > ${SCHEMALIST}
+   sqlplus -s /@enoch_apexdb << LSTEOF > ${SCHEMALIST}
 set echo off feedback off term off pagesize 0
 ${QUERY}
 exit
@@ -272,13 +280,14 @@ comment
    do
       echo "Processing for schema: ${lst_schema}"
 
+		PARFILE="${prac_dir}/expdp_${lst_schema}_${RUNNER}_${TS}.par"
    	EXPDP_LOG="expdp_${lst_schema}_${RUNNER}_${TS}.log"
    	EXPDP_LOG_PATH=${DATA_PUMP}/${DB_NAME}/${EXPDP_LOG}
 	   DUMP_FILE="expdp_${lst_schema}_${RUNNER}_${TS}.dmp"
    	DUMP_PATH=${DATA_PUMP}/${DB_NAME}/${DUMP_FILE}
 
 		#-creating backup config file
-		echo "userid=${DB_USER}/${DB_PASS}" > ${PARFILE}
+		echo "userid=${db_user}/${db_pass}" > ${PARFILE}
 		echo "schemas=${lst_schema}" >> ${PARFILE}
 		echo "dumpfile=${DUMP_FILE}" >> ${PARFILE}
 		echo "logfile=${EXPDP_LOG}" >> ${PARFILE}
@@ -288,7 +297,7 @@ comment
 		if [ $? -eq 3 ] 
 		then
 			echo "expdp FAILED"
-			mailx -s "WARNING: [${RUNNER}] Database Backup Failure Alert" ${ALERT_EMAIL} << EOF
+			mailx -s "WARNING: [${RUNNER}] Database Backup Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Database backup of ${lst_schema} from ${DB_NAME} into ${DUMP_FILE} failed!
@@ -296,7 +305,7 @@ EOF
 			exit 1
 		else
 			echo "expdp SUCCEEDED"
-		mailx -s "SUCCESS: [${RUNNER}] Database Backup Success Alert" ${ALERT_EMAIL} << EOF
+		mailx -s "SUCCESS: [${RUNNER}] Database Backup Success Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Database backup of ${lst_schema} from ${DB_NAME} into ${DUMP_FILE} succeeded!
@@ -327,7 +336,7 @@ EOF
 		then
 			echo "Failed with exit code: ${TAR_EX}"
 			echo "Unable to archive this backup. Check logs: ${LOG_FILE}"
-			mailx -s "WARNING: [${RUNNER}] EXPDP Dump Archive Failure Alert" ${ALERT_EMAIL} << EOF
+			mailx -s "WARNING: [${RUNNER}] EXPDP Dump Archive Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Archiving of ${DUMP_FILE} has failed for the database backup of ${lst_schema} to ${DB_NAME}
@@ -370,27 +379,15 @@ EOF
 
 DATABASE_IMPORT()
 {
-	TS=$(date "+%m_%d_%Y_%H_%M_%S")
-	DATA_PUMP="${DATA_PUMP_DIR}"
+	local db_user=${ONPREM_DB_USER}
+	local db_pass=${ONPREM_DB_PASS}
+	local DATA_PUMP=${DB_DIR}
+	local stack_email=${STACK_EMAIL}
+	local prac_dir=${PRACTICE_DIR}
+	local script_dir=${SCRIPT_DIR}
 
-	#-extract tar file
-	#DUMP_FILE=$(echo ${TAR_FILE} | sed 's/.tar/.dmp/g')
-	echo "Extracting ${DUMP_FILE} from ${TAR_FILE}"
-	cd ${DATA_PUMP}/${SRC_DB}
-	if ( ! tar -xzvf ${DATA_PUMP}/${SRC_DB}/${TAR_FILE} -C ${DATA_PUMP}/${DEST_DB} ${DUMP_FILE} )
-	then
-		echo "Unable to extract files!"
-		mailx -s "WARNING: [${RUNNER}] EXPDP Dump Extract Failure Alert" ${ALERT_EMAIL} << EOF
--------ALERT-------
-RUNNER: ${RUNNER}
-Extraction of ${DUMP_FILE} has failed for the database import of ${SCHEMA} to ${DB_NAME}
-EOF
-		exit 1
-	else
-		echo "Successfully extracted dump file."
-		#ls -ltr *${RUNNER}* ${DATA_PUMP}/${DEST_DB} 
-		echo
-	fi
+	exp_tar="${prac_dir}/exp_tar.lst"
+	exp_schemas="${prac_dir}/exp_schemas.lst"
 
 	#-check if database is present on server
 	if ( ! grep ${DEST_DB} /etc/oratab )
@@ -399,7 +396,7 @@ EOF
    	exit 1
 	fi
 
-	ENV_FILE="/home/oracle/scripts/oracle_env_${DEST_DB}.sh"
+	ENV_FILE="${script_dir}/oracle_env_${DEST_DB}.sh"
 	#-check if database environment file exists
 	if [[ ! -f ${ENV_FILE} ]]
 	then
@@ -417,9 +414,9 @@ EOF
 		exit 1
 	fi
 
-	DBCHECKLOG="${PRACTICE_DIR}/dbcheck.log"
+	DBCHECKLOG="${prac_dir}/dbcheck.log"
 	#-check open status
-	sqlplus ${DB_USER}/${DB_PASS} << EOF > ${DBCHECKLOG}
+	sqlplus /@enoch_samd << EOF > ${DBCHECKLOG}
 set echo on feedback on term on pagesize 0
 select status from v\$instance;
 exit
@@ -434,7 +431,7 @@ EOF
 	fi
 	echo
 
-	SCHEMALIST="${PRACTICE_DIR}/schemas.lst"
+	SCHEMALIST="${prac_dir}/schemas.lst"
 
    echo "---Schema file contents---"
    cat ${SCHEMALIST}
@@ -463,13 +460,32 @@ comment
 	#-loop each schema in list
 	while read lst_schema
 	do 
+
+		TAR_FILE=$(grep "expdp_${lst_schema}" "${exp_tar}")
+		DUMP_FILE=$(tar -tf "${DATA_PUMP}/${SRC_DB}/${TAR_FILE}" | grep "${lst_schema}.*\.dmp")
+
+    	echo "Extracting from ${TAR_FILE}"
+    	cd ${DATA_PUMP}/${SRC_DB}
+    	if ( ! tar -xzvf ${DATA_PUMP}/${SRC_DB}/${TAR_FILE} -C ${DATA_PUMP}/${DEST_DB} ${DUMP_FILE} )
+    	then
+      	echo "Unable to extract files!"
+      	mailx -s "WARNING: [${RUNNER}] EXPDP Dump Extract Failure Alert" ${stack_email} << EOF
+-------ALERT-------
+RUNNER: ${RUNNER}
+Extraction of ${TAR_FILE} has failed for the database import of ${lst_schema} to ${DEST_DB}
+EOF
+      	exit 1
+    	else
+      	echo "Successfully extracted dump file."
+    	fi
+
 		echo "Processing for schema: ${lst_schema}"
 
-		PARFILE="${PRACTICE_DIR}/impdp_${lst_schema}_${RUNNER}_${TS}.par"
+		PARFILE="${prac_dir}/impdp_${lst_schema}_${RUNNER}_${TS}.par"
 		IMPDP_LOG="impdp_${lst_schema}_${RUNNER}_${TS}.log"
 		IMPDP_LOG_PATH=${DATA_PUMP}/${DEST_DB}/${IMPDP_LOG}
 
-		echo "userid=${DB_USER}/${DB_PASS}" > ${PARFILE}
+		echo "userid=${db_user}/${db_pass}" > ${PARFILE}
 		echo "schemas=${lst_schema}" >> ${PARFILE}
 		echo "remap_schema=${lst_schema}:${lst_schema}_${RUNNER}" >> ${PARFILE}
 		echo "dumpfile=${DUMP_FILE}" >> ${PARFILE}
@@ -481,14 +497,14 @@ comment
 		if (( $? == 0 || $? == 5 ))
 		then
 			echo "impdp succeeded or completed with warnings. Check log: ${IMPDP_LOG_PATH}"
-         mailx -s "WARNING: [${RUNNER}] Database Import Completed With Warnings" ${ALERT_EMAIL} << EOF
+         mailx -s "WARNING: [${RUNNER}] Database Import Completed With Warnings" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Database import of ${SCHEMA} from ${SRC_DB} : [${DUMP_FILE}] into ${SCHEMA}_${RUNNER} in ${DEST_DB} completed with warnings.
 EOF
 		else
 			echo "impdp FAILED"
-         mailx -s "WARNING: [${RUNNER}] Database Import Failure Alert" ${ALERT_EMAIL} << EOF
+         mailx -s "WARNING: [${RUNNER}] Database Import Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Database import of ${SCHEMA} from ${SRC_DB} : [${DUMP_FILE}] into ${SCHEMA}_${RUNNER} in ${DEST_DB} has failed
@@ -510,9 +526,9 @@ EOF
 		fi
 		echo
 
-		SCHEMACHECKLOG="${PRACTICE_DIR}/schemacheck.log"
+		SCHEMACHECKLOG="${prac_dir}/schemacheck.log"
 		#-get imported schema
-		sqlplus ${DB_USER}/${DB_PASS} << SCHEMAEOF > ${SCHEMACHECKLOG}
+		sqlplus /@enoch_samd << SCHEMAEOF > ${SCHEMACHECKLOG}
 select username from dba_users where username like '%${lst_schema}_${RUNNER}%';
 exit
 SCHEMAEOF
@@ -540,9 +556,16 @@ SCHEMAEOF
          fi
       fi
 
+      local MTIME="+1"
+      local FILE_PATH="${DATA_PUMP}/${DEST_DB}"
+      local FILES="${lst_schema}_${RUNNER}"
+      CLEANUP ${MTIME} ${FILE_PATH} ${FILES}
+
 		(( count ++ ))
 
-	done < ${SCHEMALIST}
+	done < ${exp_schemas}
+	echo
+	echo "----- Import Successful -----"
 }
 
 LOCAL_MIGRATION()
@@ -576,7 +599,7 @@ comment
 			echo
 			#importing database schema
 			echo "Importing into the ${DEST_DB} database..."
-			DATABASE_IMPORT "${SRC_DB}" "${DEST_DB}" "${RUNNER}" "${DIRECTORY}" "${TAR_FILE}" "${DUMP_FILE}" "${QUERY}"
+			DATABASE_IMPORT "${SRC_DB}" "${DEST_DB}" "${RUNNER}" "${DIRECTORY}" "${QUERY}"
 			echo "Import complete!"
 		else
 			echo "Import canceled."
@@ -591,46 +614,59 @@ CLOUD_MIGRATION()
 	echo "------------ Starting Cloud Database Migration ---------------"
 	echo
 	
-	#-variables
-	local cloud_env="/home/oracle/scripts/oracle_env_${DEST_DB}.sh"
-	local datapump="${DATA_PUMP_DIR}"
-	local prac_dir="${PRACTICE_DIR}"
+	# Initialize variables
+	local script_dir=${SCRIPT_DIR}
+	local cloud_env="${script_dir}/oracle_env_${DEST_DB}.sh"
+	local datapump=${DB_DIR}
+	local prac_dir=${PRACTICE_DIR}
 	local temp_dir="${prac_dir}/tmp"
 	local THRESHOLD=80
-	local DEST_USER="${ORACLE_SSH_USER}"
-	local pem_key="${PEM_KEY_FILE}"
+	local DEST_USER=${AWS_SERV_USER}
+	local pem_key=${PEM_KEY}
+	local stack_email=${STACK_EMAIL}
 
 	echo
-	echo "Backup starting..."
-	DATABASE_BACKUP "${RUNNER}" "${THRESHOLD}" "${SRC_DB}" "${DIRECTORY}" "${QUERY}"		
+	echo "Backup starting for ${SRC_DB}..."
+	
+	# Assign db_name variable for db_backup
+	DB_NAME=${SRC_DB}
+
+	# Call the backup function
+		# All functions, checks and safeguards have been pre-defined in the database_backup function
+	DATABASE_BACKUP "${RUNNER}" "${THRESHOLD}" "${DB_NAME}" "${DIRECTORY}" "${QUERY}"		
 	echo
 	echo "Backup finished."
 
-	if [[ -z ${exp_tar} ]]
+	# Check if tar list exists
+	echo "Finding tar files..."
+	if [[ ! -s ${exp_tar} ]]
 	then
    	echo "No tar files found. Cannot migrate."
    	exit 1
 	fi
-
-   echo "Found the following tar files:"
    cat "${exp_tar}"
+	echo
 
-	local remote_script=${DEST_SERV}_import_${TS}.sh
-
+	DST_USER=${DEST_USER}
+	DST_SERV=${DEST_SERV}
+	# Transfer tar files to cloud server using SCP() function
 	echo "Transferring tar files to ${DEST_SERV}..."
 	cd ${datapump}/${SRC_DB}
+	#SCP $(cat ${exp_tar}) ${DST_USER} ${DST_SERV} "${datapump}/${DEST_DB}" ${RUNNER}
 	scp -i ${pem_key} $(cat ${exp_tar}) ${DEST_USER}@${DEST_SERV}:"${datapump}/${DEST_DB}" 		
-	if [ $? -ne 0 ]
-	then
-		echo "SCP failed with exit code: $?"
-		exit 1
-	fi
-	echo "${exp_tar} file transfer complete."
+	echo
 
-	# Copying schema list to cloud server
-
+	# Copy schema list to cloud server using SCP() function
+	#SCP ${exp_schemas} ${DST_USER} ${DST_SERV} "${temp_dir}/schemas.lst" ${RUNNER}
 	scp -i ${pem_key} ${exp_schemas} ${DEST_USER}@${DEST_SERV}:"${temp_dir}/schemas.lst"
+	echo
 
+   # Define the dynamic import script
+   local remote_script=${DEST_SERV}_import_${TS}.sh
+
+	# Generate import script
+		# Using SCRIPTEOF + EOF seperately to just to differentiate
+		# SCRIPTEOF in single-quotes to treat strings literally and disable variable expansion, etc.
 	echo "Generating import script..."
 	cat > ${temp_dir}/${remote_script} << 'SCRIPTEOF'
 #!/bin/bash
@@ -639,8 +675,6 @@ SCRIPTEOF
 	cat >> ${temp_dir}/${remote_script} << EOF
 
 source ${cloud_env}
-DB_USER=${DB_USER}
-DB_PASS=${DB_PASS}
 DEST_DPUMP=${datapump}
 DIRECTORY=${DIRECTORY}
 DEST_DB=${DEST_DB}
@@ -651,6 +685,8 @@ TAR_LIST="$(sed 's|.*/||' ${exp_tar})"
 PRAC_DIR=${prac_dir}
 TEMP_DIR="${temp_dir}"
 SCHEMALIST="${temp_dir}/schemas.lst"
+DB_USER=${AWS_DB_USER}
+DB_PASS=${AWS_DB_PASS}
 EOF
 
 	cat >> ${temp_dir}/${remote_script} << 'SCRIPTEOF'
@@ -696,7 +732,7 @@ do
 	if [ $? -ne 0 ]
 	then
 		echo "Failed to extract ${tar_file}"
-	exit 1
+		exit 1
 	fi
 	echo "${dump_file} extracted.->>"
 	rm ${tar_file}
@@ -724,6 +760,7 @@ do
 	impdp parfile=${PARFILE}
 
 	echo "Imported schema: ${schema}"
+	find ${DEST_DPUMP} -maxdepth 1 -name "*${schema}_${RUNNER}*" -mtime +1 -exec rm {} \;
 done < ${SCHEMALIST}
 
 echo "Exported all schemas!"
@@ -731,33 +768,49 @@ echo
 echo "-----------Import complete---------------"
 SCRIPTEOF
 
+	# Push import script to the cloud server
+	echo 
 	echo "Pushing import script to ${DEST_SERV}..."
+	#SCP "${temp_dir}/${remote_script}" ${DST_USER} ${DST_SERV} "${prac_dir}" ${RUNNER}
 	scp -i ${pem_key} ${temp_dir}/${remote_script} ${DEST_USER}@${DEST_SERV}:"${prac_dir}"
 
+	# Connect to the remote server, allow execute permissions, and run the script
+	echo
 	echo "Executing import script on ${DEST_SERV}..."
-	ssh -i ${pem_key} ${DEST_USER}@${DEST_SERV} "cd ${prac_dir} && chmod +x ${remote_script} && ./${remote_script}"
-	if (( $? == 0 || $? == 5 ))
+	ssh -i ${pem_key} ${DEST_USER}@${DEST_SERV} "cd ${prac_dir} && chmod 744 ${remote_script} && ./${remote_script}"
+	SSH_EX=$?
+	# impdp exit codes: 0=success, 5=completed with warnings, 1+=error
+	if (( ${SSH_EX} == 0 || ${SSH_EX} == 5 ))
 	then
 		echo "impdp succeeded or completed with warnings."
-		mailx -s "WARNING: [${RUNNER}] Database Import Completed With Warnings" ${ALERT_EMAIL} << EOF
+		mailx -s "WARNING: [${RUNNER}] Database Import Completed With Warnings" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Database import from ${SRC_DB} into ${DEST_DB} in ${DEST_SERV} completed with warnings.
 EOF
+		# Reconnect to the server and 
+		ssh -i ${pem_key} ${DEST_USER}@${DEST_SERV} "cd ${prac_dir} && mv ${remote_script} ${temp_dir}/.${remote_script}"
 	else
 		echo "impdp FAILED"
-		mailx -s "WARNING: [${RUNNER}] Database Import Failure Alert" ${ALERT_EMAIL} << EOF
+		mailx -s "WARNING: [${RUNNER}] Database Import Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
-Database import Database import from ${SRC_DB} into ${DEST_DB} in ${DEST_SERV} has failed
+Database import from ${SRC_DB} into ${DEST_DB} in ${DEST_SERV} has failed
 EOF
 		exit 1
 	fi
-	ssh -i ${pem_key} ${DEST_USER}@${DEST_SERV} "cd ${prac_dir} && mv ${remote_script} ${temp_dir}" 
+	
+	mv ${temp_dir}/${remote_script} ${temp_dir}/.${remote_script} 
+	
+	echo
+	echo "			  ---- MIGRATION COMPLETE ----"
+	echo "			Thank you for using this service."
 }
 
 CLEANUP()
 {
+
+	local stack_email=${STACK_EMAIL}
    cd ${FILE_PATH}
 
    count_before=0
@@ -775,7 +828,7 @@ CLEANUP()
          if ( ! find . -maxdepth 1 -name "*${file}*" -mtime ${MTIME} -exec rm -rf {} \; )
          then
             echo "Exit code: $?. Cleanup failed for ${file}"
-            mailx -s "WARNING: [${RUNNER}] Cleanup Failure Alert" ${ALERT_EMAIL} << EOF
+            mailx -s "WARNING: [${RUNNER}] Cleanup Failure Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Clean up of ${file} from ${FILE_PATH} has failed!
@@ -791,7 +844,7 @@ EOF
       echo "Number of matches in ${FILE_PATH} AFTER cleanup: ${count_after}"
    else
       echo "Cleanup canceled."
-      mailx -s "WARNING: [${RUNNER}] Cleanup Canceled Alert" ${ALERT_EMAIL} << EOF
+      mailx -s "WARNING: [${RUNNER}] Cleanup Canceled Alert" ${stack_email} << EOF
 -------ALERT-------
 RUNNER: ${RUNNER}
 Clean up of ${file} from ${FILE_PATH} was initiated then canceled by ${RUNNER}!
@@ -834,11 +887,10 @@ case ${function} in
 scp)
 #Utilization check
 	echo "The number of command-line arguments in this script is: $#"
-	if [ $# -ne 6 ]
+	if [ $# -ne 5 ]
 	then
 		echo "You did not run this script correctly. Please run like below:"
 		echo "UTILITY: <SCRIPT_NAME> <SRC> <DST_USER> <DST SERVER> <DST PATH> <RUNNER>"
-		echo "e.g script_name file1.txt oracle onprem.stack-clixx.com home/oracle/file1.txt ENOCH"
 		echo
 
 		read -p "Do you need help running this script? :" ANSWER
@@ -877,20 +929,18 @@ backup_f_d)
 	then
 		echo "You did not run this script correctly. Please run like below:"
 		echo "UTILITY: <SCRIPT_NAME> <SRC> <RUNNER>"
-		echo "e.g script_name home/oracle/file.txt backup"
 		echo
 
 		read -p "Do you need help running this script? :" ANSWER
 		if [[ ${ANSWER^^} == 'Y' ]]
 		then
 			echo "You have opted for help..."
-			read -p "Enter disk check threshold" THRESHOLD
 			read -p "Enter the source file: " SRC
 			read -p "Enter the runner name: " RUNNER
 
 			echo "Calling ${SCRIPT_FUNC} function..."
 			echo "..."
-			BACKUP_F_D ${THRESHOLD} ${SRC} ${RUNNER}
+			BACKUP_F_D ${SRC} ${RUNNER}
 		else
 			exit 1
 		fi
@@ -901,7 +951,7 @@ backup_f_d)
 		#call function BACKUP_F_D
 		echo "Calling ${SCRIPT_FUNC} function..."
 		echo "..."
-		BACKUP_F_D ${THRESHOLD} ${SRC} ${RUNNER}
+		BACKUP_F_D ${SRC} ${RUNNER}
 	fi
 	echo
 	;;
@@ -912,7 +962,6 @@ disk_util)
 	then
 		echo "You did not run this script correctly. Please run like below:"
 		echo "UTILITY: <SCRIPT_NAME> <THRESHOLD> <RUNNER>"
-		echo "e.g script_name 70 enoch"
 		echo
 
 		read -p "Do you need help running this script? :" ANSWER
@@ -943,11 +992,10 @@ disk_util)
 database_backup)
 	#utilization check
 	echo "The number of command-line arguments in this script is: $#"
-	if [ $# -ne 6 ]
+	if [ $# -ne 5 ]
 	then
 		echo "You did not run this script correctly. Please run like below:"
-		echo "UTILITY: <SCRIPT_NAME> <RUNNER> <SCHEMA> <DEST_DB> <DIRECTORY>"
-		echo "e.g database_backup ENOCH STACK_TEMP APEXDB DATA_PUMP_DIR"
+		echo "UTILITY: <SCRIPT_NAME> <RUNNER> <DB_NAME> <DIRECTORY> <QUERY>"
 		echo
 
 		read -p "Do you need help running this script? :" ANSWER
@@ -955,40 +1003,35 @@ database_backup)
 			then
 				echo "You have opted for help..."
 				read -p "Who is running this script? " RUNNER
-				read -p "Threshold for disk util check: " THESHOLD
-				#read -p "What is the schema name? " SCHEMA
 				read -p "What is the database name? " DB_NAME
-				read -p "What is the firectory name? " DIRECTORY
-				read -p "Enter the SQL query contained in double-quotes: " QUERY
+				read -p "What is the directory name? " DIRECTORY
+				read -p "Enter the SQL query: " QUERY
 
 				echo "Calling ${SCRIPT_FUNC} function..."
 				echo "..."
-				DATABASE_BACKUP ${RUNNER} ${THRESHOLD} ${DB_NAME} ${DIRECTORY} ${QUERY}
+				DATABASE_BACKUP ${RUNNER} ${DB_NAME} ${DIRECTORY} ${QUERY}
 			else
 				exit 1
 			fi
 	else
 		RUNNER=$2
-		THRESHOLD=$3
-		#SCHEMA=$3
-		DB_NAME=$4
-		DIRECTORY=$5
-		QUERY="$6"
+		DB_NAME=$3
+		DIRECTORY=$4
+		QUERY="$5"
 		#Call function
 		echo "Calling ${SCRIPT_FUNC} function..."
 		echo "..."
-		DATABASE_BACKUP ${RUNNER} ${THRESHOLD} ${DB_NAME} ${DIRECTORY} ${QUERY}
+		DATABASE_BACKUP ${RUNNER} ${DB_NAME} ${DIRECTORY} ${QUERY}
 	fi
 	echo
 	;;
 database_import)
 	#utilization check
 	echo "The number of command-line arguments in this script is: $#"
-	if [ $# -ne 8 ]
+	if [ $# -ne 6 ]
 	then
 		echo "You did not run this script correctly. Please run like below:"
-		echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DB_NAME> <RUNNER> <SCHEMA> <DIRECTORY> <TAR_FILE> <DUMP_FILE>"
-		echo "e.g database_import APEXDB ENOCH STACK_TEMP DATA_PUMP_DIR enoch_backup.tar enoch_backup.dmp"
+		echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DEST_DB> <RUNNER> <DIRECTORY> <QUERY>"
 		echo
 
 		read -p "Do you need help running this script? " ANSWER
@@ -998,15 +1041,12 @@ database_import)
 				read -p "What is the source database? " SRC_DB
 				read -p "What is the destination database? " DEST_DB
 				read -p "Who is running this script? " RUNNER
-				#read -p "What is the schema name? " SCHEMA
 				read -p "What is the directory name? " DIRECTORY
-				read -p "What is the tar file? " TAR_FILE
-				read -p "What is the dump file? " DUMP_FILE
 				read -p "Enter the SQL query. Please put in quotes: " QUERY
 
 				echo "Calling ${SCRIPT_FUNC} function..."
 				echo "..."
-				DATABASE_IMPORT ${SRC_DB} ${DEST_DB} ${RUNNER} ${DIRECTORY} ${TAR_FILE} ${DUMP_FILE} "${QUERY}"
+				DATABASE_IMPORT ${SRC_DB} ${DEST_DB} ${RUNNER} ${DIRECTORY} "${QUERY}"
 			else
 				exit 1
 			fi
@@ -1014,15 +1054,12 @@ database_import)
 		SRC_DB=$2
 		DEST_DB=$3
 		RUNNER=$4
-		#SCHEMA=$5
 		DIRECTORY=$5
-		TAR_FILE=$6
-		DUMP_FILE=$7
-		QUERY="$8"
+		QUERY="$6"
 		#Call function
 		echo "Calling ${SCRIPT_FUNC} function..."
 		echo "..."
-		DATABASE_IMPORT ${SRC_DB} ${DEST_DB} ${RUNNER} ${SCHEMA} ${DIRECTORY} ${TAR_FILE} ${DUMP_FILE} "${QUERY}"
+		DATABASE_IMPORT ${SRC_DB} ${DEST_DB} ${RUNNER} ${DIRECTORY} "${QUERY}"
 	fi
 	echo
 	;;
@@ -1032,8 +1069,7 @@ local_migration)
 	if [ $# -ne 6 ]
 	then
 		echo "You did not run this script correctly. Please run like below:"
-		echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DEST_DB> <RUNNER> <SCHEMA> <DIRECTORY>"
-		echo "e.g database_import APEXDB ENOCH STACK_TEMP DATA_PUMP_DIR"
+		echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DEST_DB> <RUNNER> <DIRECTORY> <QUERY>"
 		echo
 
 		read -p "Do you need help running this script? " ANSWER
@@ -1043,7 +1079,6 @@ local_migration)
 				read -p "What is the source database? " SRC_DB
 				read -p "What is the destination database? " DEST_DB
 				read -p "Who is running this script? " RUNNER
-				#read -p "What is the source schema name? " SCHEMA
 				read -p "What is the directory name? " DIRECTORY
 				read -p "What is the SQL query contained in double-quotes: " QUERY
 
@@ -1058,7 +1093,6 @@ local_migration)
 		DB_NAME=$2
 		DEST_DB=$3
 		RUNNER=$4
-		#SCHEMA=$5
 		DIRECTORY=$5
 		QUERY="$6"
 		#Call function
@@ -1074,8 +1108,7 @@ cloud_migration)
    if [ $# -ne 7 ]
    then
       echo "You did not run this script correctly. Please run like below:"
-      echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DEST_DB> <RUNNER> <SCHEMA> <DIRECTORY>"
-      echo "e.g database_import APEXDB ENOCH STACK_TEMP DATA_PUMP_DIR"
+      echo "UTILITY: <SCRIPT_NAME> <SRC_DB> <DEST_DB> <DEST_SERV> <RUNNER> <DIRECTORY> <QUERY>"
       echo
 
       read -p "Do you need help running this script? " ANSWER
@@ -1086,7 +1119,6 @@ cloud_migration)
             read -p "What is the destination database? " DEST_DB
 				read -p "What is the destination server? " DEST_SERV
             read -p "Who is running this script? " RUNNER
-            #read -p "What is the source schema name? " SCHEMA
             read -p "What is the directory name? " DIRECTORY
             read -p "What is the SQL query contained in double-quotes: " QUERY
 
@@ -1116,8 +1148,7 @@ cleanup)
 	if [ $# -ne 5 ]
 	then
 		echo "You did not run this script correctly. Please run like below:"
-		echo "UTILITY: <SCRIPT_NAME> <MTIME> <FILE_PATH> <FILES>"
-		echo "e.g cleanup +2 backup/AWSJAN26/DATAPUMP/APEXDB file1.txt"
+		echo "UTILITY: <SCRIPT_NAME> <MTIME> <FILE_PATH> <FILES> <RUNNER>"
 		echo
 
 		read -p "Do you need help running this script? :" ANSWER

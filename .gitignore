@@ -10,3 +10,4 @@ wallet/
 tnsnames.ora
 sqlnet.ora
 .claude/
+.env_secrets.sh
